@@ -43,11 +43,13 @@ ANTI_FLOOD_DELAY = 1.0		# Anti-flood delay after transmissions, seconds
 ANTI_BUZZ_DELAY = 0.09		# Anti-buzz delay after queue-empty check
 CONNECTION_MAX = 200		# To avoid hitting a thread limit
 
+PIDFILE = 'irker.pid'       # Save daemon pid to this file
+
 # No user-serviceable parts below this line
 
 version = "1.20"
 
-import sys, getopt, urlparse, time, random, socket, signal, re
+import os, sys, getopt, urlparse, time, random, socket, signal, re
 import threading, Queue, SocketServer
 import irc.client, logging
 try:
@@ -559,7 +561,7 @@ Usage:
   irkerd [-d debuglevel] [-l logfile] [-n nick] [-p password] [-V] [-h]
 
 Options
-  -d    set debug level
+  -d    set debug level, prevents irkerd from forking to background
   -l    set logfile
   -n    set nick-style
   -p    set nickserv password
@@ -596,20 +598,48 @@ if __name__ == '__main__':
             usage()
             sys.exit(0)
     fallback = re.search("%.*d", namestyle)
-    irker = Irker(debuglevel=debuglvl)
-    irker.debug(1, "irkerd version %s" % version)
-    try:
-        tcpserver = SocketServer.TCPServer((HOST, PORT), IrkerTCPHandler)
-        udpserver = SocketServer.UDPServer((HOST, PORT), IrkerUDPHandler)
-        for server in [tcpserver, udpserver]:
-            server = threading.Thread(target=server.serve_forever)
-            server.setDaemon(True)
-            server.start()
-        try:
-            signal.pause()
-        except KeyboardInterrupt:
-            raise SystemExit(1)
-    except socket.error, e:
-        sys.stderr.write("irkerd: server launch failed: %r\n" % e)
+    
+    pid = 0
+    if debuglvl == 0:
+        pid = os.fork()
+        if pid == 0:         
+            os.setsid()
+            os.umask(0)
+         
+    if pid == 0:
+        pid = 0
+        if debuglvl == 0:
+            pid = os.fork()
+            
+        if pid == 0:
+            try:
+                pid = os.getpid()
+                f = open('irkerd.pid', 'w')
+                f.write('%s' % pid)
+                f.close()
+                
+                irker = Irker(debuglevel=debuglvl)
+                irker.debug(1, "irkerd version %s" % version)
+                
+                try:
+                    tcpserver = SocketServer.TCPServer((HOST, PORT), IrkerTCPHandler)
+                    udpserver = SocketServer.UDPServer((HOST, PORT), IrkerUDPHandler)
+                    for server in [tcpserver, udpserver]:
+                        server = threading.Thread(target=server.serve_forever)
+                        server.setDaemon(True)
+                        server.start()
+                    try:
+                        signal.pause()
+                    except KeyboardInterrupt:
+                        raise SystemExit(1)
+                except socket.error, e:
+                    sys.stderr.write("irkerd: server launch failed: %r\n" % e)
+            finally:
+                if os.path.exists(PIDFILE):
+                    os.remove(PIDFILE) 
+        else:
+            os._exit(0)
+    else:
+        os._exit(0)
 
 # end
